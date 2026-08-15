@@ -7,7 +7,8 @@ PACKAGE_DIR="${ROOT_DIR}/packaging/mihomo"
 required=(
   manifest config/privilege config/resource ICON.PNG ICON_256.PNG
   app/ui/config app/ui/images/icon_64.png app/ui/images/icon_256.png
-  app/bin/mihomo app/bin/mihomo-manager app/defaults/config.yaml
+  app/bin/amd64/mihomo app/bin/amd64/mihomo-manager
+  app/bin/arm64/mihomo app/bin/arm64/mihomo-manager app/defaults/config.yaml
   cmd/main cmd/install_init cmd/install_callback cmd/uninstall_init
   cmd/uninstall_callback cmd/upgrade_init cmd/upgrade_callback
   cmd/config_init cmd/config_callback wizard/install wizard/uninstall
@@ -30,8 +31,10 @@ for script in "${PACKAGE_DIR}"/cmd/*; do
   bash -n "${script}"
 done
 
-file "${PACKAGE_DIR}/app/bin/mihomo" | grep -q 'x86-64'
-file "${PACKAGE_DIR}/app/bin/mihomo-manager" | grep -q 'x86-64'
+file "${PACKAGE_DIR}/app/bin/amd64/mihomo" | grep -q 'x86-64'
+file "${PACKAGE_DIR}/app/bin/amd64/mihomo-manager" | grep -q 'x86-64'
+file "${PACKAGE_DIR}/app/bin/arm64/mihomo" | grep -Eq 'ARM aarch64|ARM64'
+file "${PACKAGE_DIR}/app/bin/arm64/mihomo-manager" | grep -Eq 'ARM aarch64|ARM64'
 
 file "${PACKAGE_DIR}/ICON.PNG" | grep -Eq 'PNG image data, 64 x 64'
 file "${PACKAGE_DIR}/ICON_256.PNG" | grep -Eq 'PNG image data, 256 x 256'

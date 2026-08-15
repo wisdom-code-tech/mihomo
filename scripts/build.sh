@@ -7,15 +7,20 @@ CACHE_DIR="${ROOT_DIR}/.cache"
 DIST_DIR="${ROOT_DIR}/dist"
 
 MIHOMO_VERSION="1.19.29"
-MIHOMO_FILE="mihomo-linux-amd64-v1-go123-v${MIHOMO_VERSION}.gz"
-MIHOMO_SHA256="169ef2f65e914ef8ecfb4d340ffcc41894265d3389c2812996ac5cdd3dde8199"
-MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VERSION}/${MIHOMO_FILE}"
+MIHOMO_AMD64_FILE="mihomo-linux-amd64-v1-go123-v${MIHOMO_VERSION}.gz"
+MIHOMO_AMD64_SHA256="169ef2f65e914ef8ecfb4d340ffcc41894265d3389c2812996ac5cdd3dde8199"
+MIHOMO_AMD64_URL="https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VERSION}/${MIHOMO_AMD64_FILE}"
+MIHOMO_ARM64_FILE="mihomo-linux-arm64-v${MIHOMO_VERSION}.gz"
+MIHOMO_ARM64_SHA256="9a868b5e4e0ad91d9d71e1b41b0cfce78aaba44360c30df74a723f8e3926a86c"
+MIHOMO_ARM64_URL="https://github.com/MetaCubeX/mihomo/releases/download/v${MIHOMO_VERSION}/${MIHOMO_ARM64_FILE}"
 ZASHBOARD_VERSION="3.19.0"
 ZASHBOARD_FILE="zashboard-dist-no-fonts-v${ZASHBOARD_VERSION}.zip"
 ZASHBOARD_SHA256="d6e1c34771885ceb642f92c75864951bf3a35d682eafd8e088521da17aab7375"
 ZASHBOARD_URL="https://github.com/Zephyruso/zashboard/releases/download/v${ZASHBOARD_VERSION}/dist-no-fonts.zip"
 
-mkdir -p "${CACHE_DIR}" "${DIST_DIR}" "${PACKAGE_DIR}/app/bin" \
+rm -rf "${PACKAGE_DIR}/app/bin"
+mkdir -p "${CACHE_DIR}" "${DIST_DIR}" "${PACKAGE_DIR}/app/bin/amd64" \
+  "${PACKAGE_DIR}/app/bin/arm64" \
   "${PACKAGE_DIR}/app/zashboard" "${PACKAGE_DIR}/app/licenses"
 
 download_verified() {
@@ -37,11 +42,12 @@ download_verified() {
   fi
 }
 
-download_verified "${MIHOMO_URL}" "${CACHE_DIR}/${MIHOMO_FILE}" "${MIHOMO_SHA256}"
+download_verified "${MIHOMO_AMD64_URL}" "${CACHE_DIR}/${MIHOMO_AMD64_FILE}" "${MIHOMO_AMD64_SHA256}"
+download_verified "${MIHOMO_ARM64_URL}" "${CACHE_DIR}/${MIHOMO_ARM64_FILE}" "${MIHOMO_ARM64_SHA256}"
 download_verified "${ZASHBOARD_URL}" "${CACHE_DIR}/${ZASHBOARD_FILE}" "${ZASHBOARD_SHA256}"
 
-gzip -dc "${CACHE_DIR}/${MIHOMO_FILE}" > "${PACKAGE_DIR}/app/bin/mihomo"
-chmod 755 "${PACKAGE_DIR}/app/bin/mihomo"
+gzip -dc "${CACHE_DIR}/${MIHOMO_AMD64_FILE}" > "${PACKAGE_DIR}/app/bin/amd64/mihomo"
+gzip -dc "${CACHE_DIR}/${MIHOMO_ARM64_FILE}" > "${PACKAGE_DIR}/app/bin/arm64/mihomo"
 
 rm -rf "${PACKAGE_DIR}/app/zashboard" "${PACKAGE_DIR}/app/.zashboard-stage"
 mkdir -p "${PACKAGE_DIR}/app/.zashboard-stage"
@@ -57,7 +63,9 @@ fi
   cd "${ROOT_DIR}/manager"
   go mod download
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 \
-    go build -trimpath -ldflags='-s -w' -o "${PACKAGE_DIR}/app/bin/mihomo-manager" .
+    go build -trimpath -ldflags='-s -w' -o "${PACKAGE_DIR}/app/bin/amd64/mihomo-manager" .
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+    go build -trimpath -ldflags='-s -w' -o "${PACKAGE_DIR}/app/bin/arm64/mihomo-manager" .
 )
 
 find "${PACKAGE_DIR}/cmd" -type f -exec chmod 755 {} +

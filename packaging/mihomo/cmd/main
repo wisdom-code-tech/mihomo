@@ -3,8 +3,15 @@
 LOG_FILE="${TRIM_PKGVAR}/manager.log"
 PID_FILE="${TRIM_PKGVAR}/manager.pid"
 SOCKET_FILE="${TRIM_APPDEST}/mihomo.sock"
-MANAGER="${TRIM_APPDEST}/bin/mihomo-manager"
-CORE="${TRIM_APPDEST}/bin/mihomo"
+
+case "$(uname -m)" in
+  x86_64|amd64) APP_ARCH="amd64" ;;
+  aarch64|arm64) APP_ARCH="arm64" ;;
+  *) APP_ARCH="unsupported" ;;
+esac
+
+MANAGER="${TRIM_APPDEST}/bin/${APP_ARCH}/mihomo-manager"
+CORE="${TRIM_APPDEST}/bin/${APP_ARCH}/mihomo"
 
 write_error() {
   if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
@@ -25,6 +32,10 @@ start_service() {
   fi
   mkdir -p "${TRIM_PKGVAR}"
   rm -f "${PID_FILE}" "${SOCKET_FILE}"
+  if [ "${APP_ARCH}" = "unsupported" ]; then
+    write_error "不支持当前 CPU 架构：$(uname -m)。本应用仅支持 x86_64 与 arm64。"
+    return 1
+  fi
   if [ ! -x "${MANAGER}" ] || [ ! -x "${CORE}" ]; then
     write_error "Mihomo 可执行文件缺失或不可执行。"
     return 1

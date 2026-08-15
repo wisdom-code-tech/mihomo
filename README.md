@@ -1,7 +1,8 @@
 # Mihomo for fnOS
 
-原生运行的 fnOS FPK 应用，不依赖 Docker。包内包含 Mihomo、轻量管理服务和
-Zashboard。Mihomo API 只监听 `127.0.0.1:9090`，外部访问统一经过 fnOS 登录网关。
+原生运行的 fnOS FPK 应用，不依赖 Docker。单个 `platform = all` 通用包同时包含
+x86_64 与 arm64 版本的 Mihomo、轻量管理服务和 Zashboard，安装后根据 NAS CPU
+架构自动选择。Mihomo API 只监听 `127.0.0.1:9090`，外部访问统一经过 fnOS 登录网关。
 
 ## 构建
 

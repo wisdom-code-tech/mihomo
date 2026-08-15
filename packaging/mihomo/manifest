@@ -1,9 +1,9 @@
 appname = mihomo
-version = 1.0.0
+version = 1.1.0
 display_name = Mihomo
 desc = 面向 fnOS 的原生 Mihomo 代理服务，提供安全网关、运行状态检查、订阅配置更新与 Zashboard 控制面板。
 source = thirdparty
-platform = x86
+platform = all
 os_min_version = 1.1.3100
 maintainer = Jerry
 distributor = Jerry
@@ -12,4 +12,4 @@ checkport = false
 disable_authorization_path = true
 desktop_uidir = ui
 desktop_applaunchname = mihomo.Application
-changelog = 首个版本：原生运行、安全网关、订阅校验更新和 Zashboard 面板。
+changelog = 新增 x86_64 与 arm64 双架构支持，统一为 platform all 通用安装包。
