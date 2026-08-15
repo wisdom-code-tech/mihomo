@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
@@ -56,6 +57,8 @@ type app struct {
 	configDir  string
 	config     string
 	secret     string
+	proxyAuth  string
+	proxyAddr  string
 	logFile    *os.File
 	managerLog string
 	client     *http.Client
@@ -74,11 +77,12 @@ type statusResponse struct {
 }
 
 func main() {
-	var binary, configDir, socketPath, logPath string
+	var binary, configDir, socketPath, logPath, proxyListen string
 	flag.StringVar(&binary, "mihomo", "./mihomo", "mihomo binary")
 	flag.StringVar(&configDir, "config-dir", ".", "writable config directory")
 	flag.StringVar(&socketPath, "socket", "./mihomo.sock", "fnOS gateway socket")
 	flag.StringVar(&logPath, "log", "./mihomo.log", "combined log file")
+	flag.StringVar(&proxyListen, "proxy-listen", "0.0.0.0:19090", "authenticated reverse proxy listen address; empty disables it")
 	flag.Parse()
 
 	if err := os.MkdirAll(configDir, 0750); err != nil {
@@ -90,10 +94,14 @@ func main() {
 	}
 	a := &app{
 		binary: binary, configDir: configDir, config: filepath.Join(configDir, "config.yaml"),
-		secret: filepath.Join(configDir, "secret"), logFile: lf,
+		secret: filepath.Join(configDir, "secret"), proxyAuth: filepath.Join(configDir, "reverse-proxy-password"),
+		proxyAddr: proxyListen, logFile: lf,
 		managerLog: filepath.Join(filepath.Dir(logPath), "manager.log"), client: secureHTTPClient(),
 	}
 	if err := a.ensureConfig(); err != nil {
+		log.Fatal(err)
+	}
+	if err := a.ensureReverseProxyPassword(); err != nil {
 		log.Fatal(err)
 	}
 	if err := a.startCore(); err != nil {
@@ -109,21 +117,54 @@ func main() {
 		log.Fatal(err)
 	}
 
-	srv := &http.Server{Handler: a.routes(), ReadHeaderTimeout: 10 * time.Second}
+	gatewayServer := &http.Server{Handler: a.routes(), ReadHeaderTimeout: 10 * time.Second}
+	servers := []*http.Server{gatewayServer}
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- gatewayServer.Serve(ln)
+	}()
+	if proxyListen != "" {
+		proxyLn, listenErr := net.Listen("tcp", proxyListen)
+		if listenErr != nil {
+			log.Fatal(listenErr)
+		}
+		proxyServer := &http.Server{Handler: a.reverseProxyRoutes(), ReadHeaderTimeout: 10 * time.Second}
+		servers = append(servers, proxyServer)
+		go func() {
+			errCh <- proxyServer.Serve(proxyLn)
+		}()
+		log.Printf("authenticated reverse proxy listening on %s", proxyListen)
+	}
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-done
-		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(ctx)
-	}()
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("gateway server failed: %v", err)
+	select {
+	case <-done:
+	case serveErr := <-errCh:
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			log.Printf("manager server failed: %v", serveErr)
+		}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	for _, server := range servers {
+		_ = server.Shutdown(ctx)
+	}
+	cancel()
 	a.stopCore()
 	_ = os.Remove(socketPath)
 	_ = lf.Close()
+}
+
+func (a *app) ensureReverseProxyPassword() error {
+	if _, err := os.Stat(a.proxyAuth); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return err
+	}
+	return os.WriteFile(a.proxyAuth, []byte(hex.EncodeToString(buf)), 0600)
 }
 
 func (a *app) ensureConfig() error {
@@ -201,6 +242,7 @@ func (a *app) restartCore() error {
 func (a *app) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", a.status)
+	mux.HandleFunc("GET /api/reverse-proxy", a.reverseProxyInfo)
 	mux.HandleFunc("GET /api/config", a.getConfig)
 	mux.HandleFunc("PUT /api/config", a.saveConfig)
 	mux.HandleFunc("GET /api/logs/stream", a.streamLogs)
@@ -224,6 +266,69 @@ func (a *app) routes() http.Handler {
 			w.Header().Set("Cache-Control", "no-store")
 		}
 		mux.ServeHTTP(w, r)
+	})
+}
+
+func (a *app) reverseProxyRoutes() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", http.FileServer(http.Dir(filepath.Join(a.configDir, "ui")))))
+	mux.Handle("/core/", a.coreProxy())
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		hostname, port := r.Host, ""
+		if parsedHost, parsedPort, err := net.SplitHostPort(r.Host); err == nil {
+			hostname, port = parsedHost, parsedPort
+		}
+		query := url.Values{
+			"hostname":           []string{hostname},
+			"secondaryPath":      []string{"/core"},
+			"disableUpgradeCore": []string{"1"},
+		}
+		if port != "" {
+			query.Set("port", port)
+		}
+		http.Redirect(w, r, "/dashboard/#/setup?"+query.Encode(), http.StatusTemporaryRedirect)
+	})
+	return a.requireReverseProxyAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		mux.ServeHTTP(w, r)
+	}))
+}
+
+func (a *app) requireReverseProxyAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		expected, err := os.ReadFile(a.proxyAuth)
+		validUser := subtle.ConstantTimeCompare([]byte(username), []byte("mihomo")) == 1
+		validPassword := subtle.ConstantTimeCompare([]byte(password), bytes.TrimSpace(expected)) == 1
+		if err != nil || !ok || !validUser || !validPassword {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Mihomo reverse proxy", charset="UTF-8"`)
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "需要反向代理访问凭据", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *app) reverseProxyInfo(w http.ResponseWriter, r *http.Request) {
+	if !isAdmin(r) {
+		writeError(w, http.StatusForbidden, "仅 fnOS 管理员可以查看反向代理凭据")
+		return
+	}
+	password, err := os.ReadFile(a.proxyAuth)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取反向代理凭据失败: "+err.Error())
+		return
+	}
+	_, port, splitErr := net.SplitHostPort(a.proxyAddr)
+	if splitErr != nil {
+		port = "19090"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": a.proxyAddr != "", "port": port, "username": "mihomo",
+		"password": strings.TrimSpace(string(password)),
 	})
 }
 

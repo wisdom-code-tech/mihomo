@@ -23,6 +23,9 @@ FPK 与 SHA-256 文件。
 - 配置编辑器使用内容哈希避免覆盖并发修改；保存时强制安全控制字段、运行 Mihomo
   校验、备份上一版并仅在内容变化时自动重启。
 - 实时日志通过 SSE 分别跟踪 Mihomo 内核与管理服务日志，支持暂停、切换来源和清屏。
+- 独立的 `19090` 端口用于反向代理 Zashboard；入口使用单独生成的 Basic Auth
+  凭据，管理服务在转发 API/WebSocket 时注入核心密钥，核心仍只监听
+  `127.0.0.1:9090`。
 
 ## 数据位置
 
@@ -31,5 +34,6 @@ FPK 与 SHA-256 文件。
 - 订阅地址：`${TRIM_PKGVAR}/subscription.url`（权限 `0600`）
 - Mihomo 日志：`${TRIM_PKGVAR}/mihomo.log`
 - 管理服务日志：`${TRIM_PKGVAR}/manager.log`
+- 反向代理密码：`${TRIM_PKGVAR}/reverse-proxy-password`（权限 `0600`）
 
 订阅更新采用“HTTPS 下载 → 强制安全控制字段 → mihomo 校验 → 原子替换 → 重启”流程。

@@ -111,9 +111,58 @@ func TestReadLogChunkTailsAndFollows(t *testing.T) {
 }
 
 func TestEmbeddedUIContainsBackNavigationAndTools(t *testing.T) {
-	for _, marker := range []string{"返回管理页", "config-editor", "api/logs/stream", "dashboard-frame"} {
+	for _, marker := range []string{"返回管理页", "config-editor", "api/logs/stream", "dashboard-frame", "反向代理入口", "proxy-password"} {
 		if !strings.Contains(indexHTML, marker) {
 			t.Errorf("embedded UI missing %q", marker)
+		}
+	}
+}
+
+func TestReverseProxyPasswordIsStable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "reverse-proxy-password")
+	a := &app{proxyAuth: path}
+	if err := a.ensureReverseProxyPassword(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(path)
+	if err != nil || len(first) != 48 {
+		t.Fatalf("unexpected generated credential length=%d err=%v", len(first), err)
+	}
+	if err := a.ensureReverseProxyPassword(); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := os.ReadFile(path)
+	if string(first) != string(second) {
+		t.Fatal("credential changed during repeated initialization")
+	}
+}
+
+func TestReverseProxyRequiresAuthAndConfiguresDashboard(t *testing.T) {
+	dir := t.TempDir()
+	passwordPath := filepath.Join(dir, "reverse-proxy-password")
+	if err := os.WriteFile(passwordPath, []byte("proxy-password"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{configDir: dir, secret: filepath.Join(dir, "secret"), proxyAuth: passwordPath}
+	handler := a.reverseProxyRoutes()
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "http://proxy.example/", nil))
+	if unauthorized.Code != http.StatusUnauthorized || unauthorized.Header().Get("WWW-Authenticate") == "" {
+		t.Fatalf("unexpected unauthorized response: %d", unauthorized.Code)
+	}
+
+	authorized := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "https://proxy.example/", nil)
+	request.SetBasicAuth("mihomo", "proxy-password")
+	handler.ServeHTTP(authorized, request)
+	if authorized.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("unexpected authorized response: %d", authorized.Code)
+	}
+	location := authorized.Header().Get("Location")
+	for _, expected := range []string{"/dashboard/#/setup?", "hostname=proxy.example", "secondaryPath=%2Fcore"} {
+		if !strings.Contains(location, expected) {
+			t.Fatalf("redirect %q missing %q", location, expected)
 		}
 	}
 }

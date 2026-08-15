@@ -12,6 +12,7 @@ esac
 
 MANAGER="${TRIM_APPDEST}/bin/${APP_ARCH}/mihomo-manager"
 CORE="${TRIM_APPDEST}/bin/${APP_ARCH}/mihomo"
+PROXY_PORT="${TRIM_SERVICE_PORT:-19090}"
 
 write_error() {
   if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
@@ -44,6 +45,7 @@ start_service() {
     -mihomo "${CORE}" \
     -config-dir "${TRIM_PKGVAR}" \
     -socket "${SOCKET_FILE}" \
+    -proxy-listen "0.0.0.0:${PROXY_PORT}" \
     -log "${TRIM_PKGVAR}/mihomo.log" >> "${LOG_FILE}" 2>&1 &
   pid=$!
   printf '%s' "${pid}" > "${PID_FILE}"

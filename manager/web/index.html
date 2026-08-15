@@ -39,6 +39,8 @@
     .kicker { color: var(--accent); letter-spacing: .16em; font: 600 .75rem ui-monospace, monospace; }
     h1 { margin: 1rem 0 2.8rem; font-size: clamp(2.6rem, 7vw, 4.8rem); line-height: .98; letter-spacing: -.055em; }
     .panel { padding: clamp(1.4rem, 4vw, 2.6rem); border: 1px solid var(--line); border-radius: 1.6rem; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 2.5rem 7rem #03101a99; }
+    .panel + .panel { margin-top: 1.2rem; }
+    .panel h2 { margin: 0 0 .6rem; font-size: 1.25rem; }
     .status-row { display: flex; align-items: center; gap: .9rem; }
     .dot { width: .75rem; height: .75rem; border-radius: 50%; background: #6c7688; box-shadow: 0 0 0 .55rem #6c768812; }
     .dot.on { background: var(--accent); box-shadow: 0 0 0 .55rem #62d8cc14, 0 0 1.6rem #62d8cc66; }
@@ -57,6 +59,8 @@
     .message { min-height: 1.4rem; margin-top: 1rem; color: var(--accent); }
     .message.error { color: var(--danger); }
     .hint { max-width: 68ch; margin-top: 2rem; color: var(--muted); font-size: .9rem; line-height: 1.7; text-wrap: pretty; }
+    .proxy-grid { display: grid; grid-template-columns: 1.2fr .7fr 1.4fr; gap: .8rem; margin-top: 1.2rem; }
+    .proxy-grid input { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: .85rem; }
     .view { position: fixed; z-index: 10; inset: 0; display: none; flex-direction: column; background: var(--bg); }
     .view.active { display: flex; }
     .viewbar { position: relative; display: flex; align-items: center; gap: 1rem; min-height: 4.2rem; padding: .7rem 1rem; border-bottom: 1px solid var(--line); background: #0d131d; }
@@ -81,6 +85,7 @@
       .actions .button { flex: 1 1 calc(50% - .7rem); }
       .viewbar { flex-wrap: wrap; }
       .log-tools { grid-template-columns: 1fr 1fr; }
+      .proxy-grid { grid-template-columns: 1fr; }
       .live { justify-self: start; }
     }
   </style>
@@ -104,6 +109,20 @@
       </div>
       <div id="message" class="message" role="status" aria-live="polite"></div>
       <p class="hint">控制 API 只监听 127.0.0.1:9090，并通过 fnOS 登录网关访问。配置保存前会执行 mihomo 校验，成功后保留 config.yaml.bak 并自动重启内核。</p>
+    </section>
+    <section class="panel" aria-labelledby="proxy-title">
+      <h2 id="proxy-title">反向代理入口</h2>
+      <p class="hint" style="margin-top:0">将反向代理上游指向 NAS 地址和以下专用端口。访问域名根路径后会自动打开并连接 Zashboard，Mihomo 核心仍只监听本机 9090。</p>
+      <div class="proxy-grid">
+        <div><label for="proxy-upstream">上游地址</label><input id="proxy-upstream" readonly value="正在载入…"></div>
+        <div><label for="proxy-username">用户名</label><input id="proxy-username" readonly></div>
+        <div><label for="proxy-password">密码</label><input id="proxy-password" type="password" readonly></div>
+      </div>
+      <div class="actions">
+        <button id="proxy-toggle" class="button secondary" type="button">显示密码</button>
+        <button id="proxy-copy" class="button quiet" type="button">复制密码</button>
+      </div>
+      <div id="proxy-message" class="message" role="status" aria-live="polite"></div>
     </section>
   </main>
 
@@ -164,6 +183,28 @@
     async function post(path, body) {
       return request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
     }
+    async function loadReverseProxy() {
+      try {
+        const data = await request('reverse-proxy');
+        $('proxy-upstream').value = data.enabled ? `http://NAS_IP:${data.port}` : '未启用';
+        $('proxy-username').value = data.username || '';
+        $('proxy-password').value = data.password || '';
+      } catch (error) { setMessage('proxy-message', error.message, true); }
+    }
+    $('proxy-toggle').onclick = () => {
+      const showing = $('proxy-password').type === 'text';
+      $('proxy-password').type = showing ? 'password' : 'text';
+      $('proxy-toggle').textContent = showing ? '显示密码' : '隐藏密码';
+    };
+    $('proxy-copy').onclick = async () => {
+      try {
+        await navigator.clipboard.writeText($('proxy-password').value);
+        setMessage('proxy-message', '密码已复制');
+      } catch (_) {
+        $('proxy-password').type = 'text'; $('proxy-password').select();
+        setMessage('proxy-message', '浏览器禁止自动复制，请使用 Ctrl/Cmd+C');
+      }
+    };
     function openView(id) { $(id).classList.add('active'); $('main').inert = true; $('main').setAttribute('aria-hidden', 'true'); document.body.style.overflow = 'hidden'; }
     function closeView(id) {
       if (id === 'config-view' && $('config-editor').value !== configOriginal && !confirm('配置尚未保存，确定返回吗？')) return;
@@ -229,7 +270,7 @@
     };
     document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => closeView(button.dataset.close));
     document.addEventListener('keydown', event => { if (event.key === 'Escape') { const active = document.querySelector('.view.active'); if (active) closeView(active.id); } });
-    refreshStatus(); setInterval(refreshStatus, 10000);
+    refreshStatus(); loadReverseProxy(); setInterval(refreshStatus, 10000);
   </script>
 </body>
 </html>
