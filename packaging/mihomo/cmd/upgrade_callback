@@ -1,0 +1,5 @@
+#!/bin/bash
+
+mkdir -p "${TRIM_PKGVAR}/ui"
+cp -R "${TRIM_APPDEST}/zashboard/." "${TRIM_PKGVAR}/ui/"
+exit 0

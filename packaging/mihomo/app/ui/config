@@ -1,0 +1,15 @@
+{
+  ".url": {
+    "mihomo.Application": {
+      "title": "Mihomo",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewaySocket": "mihomo.sock",
+      "gatewayPrefix": "/app/mihomo",
+      "url": "/app/mihomo/",
+      "allUsers": false,
+      "accessPerm": "readonly"
+    }
+  }
+}

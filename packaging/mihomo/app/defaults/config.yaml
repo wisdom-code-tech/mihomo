@@ -1,0 +1,12 @@
+# 这是可启动的最小配置。请在 Mihomo 管理页填写订阅地址更新配置。
+mode: rule
+log-level: info
+ipv6: false
+allow-lan: false
+external-controller: 127.0.0.1:9090
+external-ui: ui
+secret: ""
+proxies: []
+proxy-groups: []
+rules:
+  - MATCH,DIRECT

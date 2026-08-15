@@ -1,0 +1,9 @@
+#!/bin/bash
+
+if [ "${wizard_data_action:-keep}" = "delete" ]; then
+  pkgvar="${TRIM_PKGVAR:-}"
+  case "${pkgvar}" in
+    /vol*/@appdata/mihomo|/var/apps/mihomo/var) rm -rf -- "${pkgvar}" ;;
+  esac
+fi
+exit 0

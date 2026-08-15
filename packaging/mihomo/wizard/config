@@ -1,0 +1,11 @@
+[
+  {
+    "stepTitle": "Mihomo 设置",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "订阅下载、配置校验与服务重启请从桌面打开 Mihomo 管理页操作。"
+      }
+    ]
+  }
+]

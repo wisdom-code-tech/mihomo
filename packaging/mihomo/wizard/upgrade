@@ -1,0 +1,11 @@
+[
+  {
+    "stepTitle": "升级 Mihomo",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "升级会更新 Mihomo 内核、管理服务和 Zashboard；现有配置、订阅地址与备份不会被覆盖。"
+      }
+    ]
+  }
+]

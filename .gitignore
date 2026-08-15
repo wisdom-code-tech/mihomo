@@ -1,0 +1,19 @@
+.DS_Store
+dist/
+.tools/
+packaging/vaultwarden/app/server/runtime/
+packaging/vaultwarden/app/server/vaultwarden
+packaging/vaultwarden/app/server/gateway-proxy
+packaging/vaultwarden/app/server/web-vault/
+packaging/vaultwarden/*.fpk
+*.fpk
+.cache/
+.tools/
+dist/
+.DS_Store
+packaging/mihomo/*.fpk
+packaging/mihomo/app/bin/
+packaging/mihomo/app/zashboard/
+
+# 本地需求与包含私密订阅信息的参考配置
+参考.yaml
