@@ -17,6 +17,13 @@ GitHub Actions 会在推送到 `main`、Pull Request、手动触发及 `v*` 标�
 构建。普通构建产物保留 30 天；推送版本标签时会同时创建 GitHub Release 并附加
 FPK 与 SHA-256 文件。
 
+## 管理功能
+
+- Zashboard 在应用内全屏视图打开，并始终提供“返回管理页”。
+- 配置编辑器使用内容哈希避免覆盖并发修改；保存时强制安全控制字段、运行 Mihomo
+  校验、备份上一版并仅在内容变化时自动重启。
+- 实时日志通过 SSE 分别跟踪 Mihomo 内核与管理服务日志，支持暂停、切换来源和清屏。
+
 ## 数据位置
 
 - `config.yaml`：`${TRIM_PKGVAR}/config.yaml`

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -44,17 +47,21 @@ rules:
 )
 
 type app struct {
-	mu        sync.Mutex
-	cmd       *exec.Cmd
-	startedAt time.Time
-	lastError string
-	binary    string
-	configDir string
-	config    string
-	secret    string
-	logFile   *os.File
-	client    *http.Client
+	mu         sync.Mutex
+	configMu   sync.Mutex
+	cmd        *exec.Cmd
+	startedAt  time.Time
+	lastError  string
+	binary     string
+	configDir  string
+	config     string
+	secret     string
+	logFile    *os.File
+	managerLog string
+	client     *http.Client
 }
+
+var errConfigConflict = errors.New("配置文件已被其他操作修改，请重新载入后再保存")
 
 type statusResponse struct {
 	Running      bool   `json:"running"`
@@ -83,7 +90,8 @@ func main() {
 	}
 	a := &app{
 		binary: binary, configDir: configDir, config: filepath.Join(configDir, "config.yaml"),
-		secret: filepath.Join(configDir, "secret"), logFile: lf, client: secureHTTPClient(),
+		secret: filepath.Join(configDir, "secret"), logFile: lf,
+		managerLog: filepath.Join(filepath.Dir(logPath), "manager.log"), client: secureHTTPClient(),
 	}
 	if err := a.ensureConfig(); err != nil {
 		log.Fatal(err)
@@ -193,6 +201,9 @@ func (a *app) restartCore() error {
 func (a *app) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", a.status)
+	mux.HandleFunc("GET /api/config", a.getConfig)
+	mux.HandleFunc("PUT /api/config", a.saveConfig)
+	mux.HandleFunc("GET /api/logs/stream", a.streamLogs)
 	mux.HandleFunc("POST /api/subscription", a.updateSubscription)
 	mux.HandleFunc("POST /api/restart", a.restart)
 	mux.Handle("/dashboard/", http.StripPrefix("/dashboard/", http.FileServer(http.Dir(filepath.Join(a.configDir, "ui")))))
@@ -209,6 +220,9 @@ func (a *app) routes() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		mux.ServeHTTP(w, r)
 	})
 }
@@ -272,36 +286,118 @@ func (a *app) updateSubscription(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "订阅文件读取失败或超过 8 MiB")
 		return
 	}
-	secret, _ := os.ReadFile(a.secret)
-	tmp := a.config + ".new"
-	if err = a.writeSecuredConfig(raw, strings.TrimSpace(string(secret)), tmp); err != nil {
-		writeError(w, http.StatusBadRequest, "订阅不是有效的 Mihomo YAML: "+err.Error())
-		return
-	}
-	check := exec.CommandContext(r.Context(), a.binary, "-t", "-d", a.configDir, "-f", tmp)
-	if output, checkErr := check.CombinedOutput(); checkErr != nil {
-		_ = os.Remove(tmp)
-		writeError(w, http.StatusBadRequest, "配置校验失败: "+strings.TrimSpace(string(output)))
-		return
-	}
-	_ = os.Rename(a.config, a.config+".bak")
-	if err = os.Rename(tmp, a.config); err != nil {
-		_ = os.Rename(a.config+".bak", a.config)
-		writeError(w, http.StatusInternalServerError, "配置替换失败")
+	changed, err := a.applyConfig(r.Context(), raw, "")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "订阅配置应用失败: "+err.Error())
 		return
 	}
 	if err = os.WriteFile(filepath.Join(a.configDir, "subscription.url"), []byte(u.String()+"\n"), 0600); err != nil {
 		writeError(w, http.StatusInternalServerError, "订阅地址保存失败")
 		return
 	}
-	if err = a.restartCore(); err != nil {
-		_ = os.Rename(a.config, a.config+".failed")
-		_ = os.Rename(a.config+".bak", a.config)
-		_ = a.restartCore()
-		writeError(w, http.StatusInternalServerError, "新配置启动失败，已回滚上一份配置: "+err.Error())
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "changed": changed})
+}
+
+func (a *app) getConfig(w http.ResponseWriter, r *http.Request) {
+	if !isAdmin(r) {
+		writeError(w, http.StatusForbidden, "仅 fnOS 管理员可以查看配置")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	raw, err := os.ReadFile(a.config)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取配置失败: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"content": string(raw),
+		"sha256":  contentHash(raw),
+	})
+}
+
+func (a *app) saveConfig(w http.ResponseWriter, r *http.Request) {
+	if !isAdmin(r) {
+		writeError(w, http.StatusForbidden, "仅 fnOS 管理员可以修改配置")
+		return
+	}
+	var input struct {
+		Content string `json:"content"`
+		SHA256  string `json:"sha256"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxConfigSize+1)).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "请求格式无效或超过 8 MiB")
+		return
+	}
+	changed, err := a.applyConfig(r.Context(), []byte(input.Content), input.SHA256)
+	if errors.Is(err, errConfigConflict) {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	raw, _ := os.ReadFile(a.config)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "changed": changed, "content": string(raw), "sha256": contentHash(raw),
+	})
+}
+
+func (a *app) applyConfig(ctx context.Context, raw []byte, expectedHash string) (bool, error) {
+	a.configMu.Lock()
+	defer a.configMu.Unlock()
+
+	current, err := os.ReadFile(a.config)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	if expectedHash != "" && contentHash(current) != expectedHash {
+		return false, errConfigConflict
+	}
+	secret, err := os.ReadFile(a.secret)
+	if err != nil {
+		return false, err
+	}
+	tmp, err := os.CreateTemp(a.configDir, ".config-*.yaml")
+	if err != nil {
+		return false, err
+	}
+	tmpPath := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(tmpPath)
+	if err = a.writeSecuredConfig(raw, strings.TrimSpace(string(secret)), tmpPath); err != nil {
+		return false, errors.New("YAML 无效: " + err.Error())
+	}
+	normalized, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(current, normalized) {
+		return false, nil
+	}
+	check := exec.CommandContext(ctx, a.binary, "-t", "-d", a.configDir, "-f", tmpPath)
+	if output, checkErr := check.CombinedOutput(); checkErr != nil {
+		return false, errors.New("mihomo 校验失败: " + strings.TrimSpace(string(output)))
+	}
+	if len(current) > 0 {
+		if err = os.WriteFile(a.config+".bak", current, 0600); err != nil {
+			return false, errors.New("配置备份失败: " + err.Error())
+		}
+	}
+	if err = os.Rename(tmpPath, a.config); err != nil {
+		return false, errors.New("配置替换失败: " + err.Error())
+	}
+	if err = a.restartCore(); err != nil {
+		_ = os.WriteFile(a.config+".failed", normalized, 0600)
+		_ = os.WriteFile(a.config, current, 0600)
+		_ = a.restartCore()
+		return false, errors.New("新配置启动失败，已回滚: " + err.Error())
+	}
+	return true, nil
+}
+
+func contentHash(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 func (a *app) writeSecuredConfig(raw []byte, secret, path string) error {
@@ -345,6 +441,106 @@ func (a *app) restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *app) streamLogs(w http.ResponseWriter, r *http.Request) {
+	if !isAdmin(r) {
+		writeError(w, http.StatusForbidden, "仅 fnOS 管理员可以查看日志")
+		return
+	}
+	path := a.logFile.Name()
+	if r.URL.Query().Get("source") == "manager" {
+		path = a.managerLog
+	} else if source := r.URL.Query().Get("source"); source != "" && source != "mihomo" {
+		writeError(w, http.StatusBadRequest, "日志来源无效")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "当前网关不支持实时日志")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	var offset int64 = -1
+	ticker := time.NewTicker(750 * time.Millisecond)
+	keepAlive := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	defer keepAlive.Stop()
+	send := func() bool {
+		chunk, next, reset, err := readLogChunk(path, offset)
+		if err != nil && !os.IsNotExist(err) {
+			chunk = "读取日志失败: " + err.Error() + "\n"
+		}
+		offset = next
+		if chunk == "" && !reset {
+			return true
+		}
+		payload, _ := json.Marshal(map[string]any{"chunk": chunk, "reset": reset})
+		if _, err = fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !send() {
+		return
+	}
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if !send() {
+				return
+			}
+		case <-keepAlive.C:
+			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+func readLogChunk(path string, offset int64) (chunk string, next int64, reset bool, err error) {
+	const initialTail = int64(64 << 10)
+	const maxChunk = int64(64 << 10)
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", 0, offset > 0, err
+	}
+	if offset < 0 {
+		offset = info.Size() - initialTail
+		if offset < 0 {
+			offset = 0
+		}
+		reset = true
+	} else if info.Size() < offset {
+		offset = 0
+		reset = true
+	}
+	if info.Size() == offset {
+		return "", offset, reset, nil
+	}
+	length := info.Size() - offset
+	if length > maxChunk {
+		length = maxChunk
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", offset, reset, err
+	}
+	defer file.Close()
+	buf := make([]byte, length)
+	n, err := file.ReadAt(buf, offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", offset, reset, err
+	}
+	return string(buf[:n]), offset + int64(n), reset, nil
 }
 
 func (a *app) coreProxy() http.Handler {
@@ -418,8 +614,5 @@ func index(w http.ResponseWriter, _ *http.Request) {
 	_, _ = io.WriteString(w, indexHTML)
 }
 
-const indexHTML = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mihomo 管理</title><style>
-:root{color-scheme:dark;font-family:Inter,"PingFang SC",sans-serif;background:#090b14;color:#edf2ff}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 85% 0,#32276d55,transparent 38%),#090b14}.wrap{max-width:760px;margin:auto;padding:64px 24px}.eyebrow{color:#7de7dc;letter-spacing:.14em;font-size:12px}.card{margin-top:20px;padding:28px;border:1px solid #ffffff18;border-radius:24px;background:#121625dd;box-shadow:0 24px 80px #0008}.row{display:flex;align-items:center;gap:14px;flex-wrap:wrap}.dot{width:11px;height:11px;border-radius:50%;background:#788095;box-shadow:0 0 18px currentColor}.dot.on{background:#62e6b1}.status{font-size:28px;font-weight:700}.meta{color:#9da7bd;margin:10px 0 28px}label{display:block;margin-bottom:8px;color:#cbd3e5}input{width:100%;padding:14px 16px;border-radius:12px;border:1px solid #ffffff20;background:#090c17;color:white;font:inherit;outline:none}input:focus{border-color:#7667ef}.actions{display:flex;gap:12px;margin-top:16px;flex-wrap:wrap}button,a.button{border:0;border-radius:12px;padding:12px 17px;background:#7667ef;color:white;font:600 14px inherit;text-decoration:none;cursor:pointer}.secondary{background:#232a3d!important}.msg{min-height:24px;margin-top:14px;color:#7de7dc}.hint{font-size:13px;color:#818da6;line-height:1.6;margin-top:24px}@media(max-width:520px){.wrap{padding-top:32px}.card{padding:21px}.status{font-size:23px}}
-</style></head><body><main class="wrap"><div class="eyebrow">FNOS NATIVE SERVICE</div><h1>Mihomo 管理</h1><section class="card"><div class="row"><span id="dot" class="dot"></span><span id="status" class="status">正在检查…</span></div><div id="meta" class="meta"></div><label for="url">订阅配置地址</label><input id="url" type="url" placeholder="https://example.com/config.yaml" autocomplete="off"><div class="actions"><button id="update">下载、校验并应用</button><button id="restart" class="secondary">重启内核</button><a id="dashboard" class="button secondary" href="dashboard/">打开 Zashboard</a></div><div id="msg" class="msg"></div><div class="hint">控制 API 仅监听 127.0.0.1:9090，并通过 fnOS 登录网关访问。更新配置会保留上一份 config.yaml.bak；下载文件在通过 mihomo 校验前不会生效。</div></section></main><script>
-const base=location.pathname.replace(/\/?$/,'/'),$=id=>document.getElementById(id);const qp=new URLSearchParams({hostname:location.hostname,secondaryPath:'/app/mihomo/core',disableUpgradeCore:'1'});if(location.port)qp.set('port',location.port);$('dashboard').href=base+'dashboard/#/setup?'+qp;async function status(){try{const r=await fetch(base+'api/status'),d=await r.json();$('dot').classList.toggle('on',d.running);$('status').textContent=d.running?'服务运行中':'服务未运行';$('meta').textContent=[d.version&&'mihomo '+d.version,d.pid&&'PID '+d.pid,d.lastError].filter(Boolean).join(' · ');if(!$('url').value)$('url').value=d.subscription||''}catch(e){$('status').textContent='状态获取失败';$('meta').textContent=e.message}}async function post(path,body){$('msg').textContent='处理中…';const r=await fetch(base+'api/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):'{}'}),d=await r.json();if(!r.ok)throw Error(d.error||'请求失败');$('msg').textContent='操作成功';await status()}$('update').onclick=()=>post('subscription',{url:$('url').value}).catch(e=>$('msg').textContent=e.message);$('restart').onclick=()=>post('restart').catch(e=>$('msg').textContent=e.message);status();setInterval(status,10000);
-</script></body></html>`
+//go:embed web/index.html
+var indexHTML string

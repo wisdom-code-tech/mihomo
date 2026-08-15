@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Mihomo fnOS 原生服务管理界面">
+  <title>Mihomo 管理</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090d14;
+      --surface: #111824;
+      --surface-raised: #172131;
+      --line: #293447;
+      --text: #edf4ff;
+      --muted: #93a0b5;
+      --accent: #62d8cc;
+      --accent-ink: #071411;
+      --danger: #ff9c9c;
+      font-family: "SF Pro Display", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { background: var(--bg); scroll-behavior: smooth; }
+    body { margin: 0; min-height: 100dvh; color: var(--text); background: var(--bg); }
+    body::before {
+      content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .32;
+      background: radial-gradient(circle at 82% 4%, #24444d 0, transparent 34%),
+                  linear-gradient(135deg, transparent 0 49%, #ffffff05 49% 50%, transparent 50% 100%);
+      background-size: auto, 30px 30px;
+    }
+    button, input, textarea, select { font: inherit; }
+    button { border: 0; cursor: pointer; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 3px;
+    }
+    .skip { position: fixed; left: 1rem; top: -4rem; z-index: 30; padding: .75rem 1rem; background: var(--accent); color: var(--accent-ink); }
+    .skip:focus { top: 1rem; }
+    .shell { position: relative; max-width: 960px; margin: auto; padding: 4.5rem 1.5rem 6rem; }
+    .kicker { color: var(--accent); letter-spacing: .16em; font: 600 .75rem ui-monospace, monospace; }
+    h1 { margin: 1rem 0 2.8rem; font-size: clamp(2.6rem, 7vw, 4.8rem); line-height: .98; letter-spacing: -.055em; }
+    .panel { padding: clamp(1.4rem, 4vw, 2.6rem); border: 1px solid var(--line); border-radius: 1.6rem; background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 2.5rem 7rem #03101a99; }
+    .status-row { display: flex; align-items: center; gap: .9rem; }
+    .dot { width: .75rem; height: .75rem; border-radius: 50%; background: #6c7688; box-shadow: 0 0 0 .55rem #6c768812; }
+    .dot.on { background: var(--accent); box-shadow: 0 0 0 .55rem #62d8cc14, 0 0 1.6rem #62d8cc66; }
+    .status { font-size: clamp(1.7rem, 4vw, 2.45rem); font-weight: 650; letter-spacing: -.025em; }
+    .meta { min-height: 1.5rem; margin: .8rem 0 2.2rem 1.65rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+    label { display: block; margin-bottom: .55rem; color: #c9d3e3; font-weight: 560; }
+    input, textarea, select { width: 100%; border: 1px solid var(--line); border-radius: .7rem; background: #090e17; color: var(--text); }
+    input, select { padding: .9rem 1rem; }
+    textarea { resize: none; padding: 1rem 1.1rem; line-height: 1.55; tab-size: 2; }
+    .actions { display: flex; flex-wrap: wrap; gap: .7rem; margin-top: 1rem; }
+    .button { min-height: 2.75rem; padding: .72rem 1rem; border-radius: .65rem; background: var(--accent); color: var(--accent-ink); font-weight: 680; transition: transform .2s, filter .2s, background .2s; }
+    .button:hover { filter: brightness(1.08); transform: translateY(-1px); }
+    .button:active { transform: translateY(1px) scale(.985); }
+    .button.secondary { background: #222d40; color: var(--text); }
+    .button.quiet { background: transparent; color: #c4cede; border: 1px solid var(--line); }
+    .message { min-height: 1.4rem; margin-top: 1rem; color: var(--accent); }
+    .message.error { color: var(--danger); }
+    .hint { max-width: 68ch; margin-top: 2rem; color: var(--muted); font-size: .9rem; line-height: 1.7; text-wrap: pretty; }
+    .view { position: fixed; z-index: 10; inset: 0; display: none; flex-direction: column; background: var(--bg); }
+    .view.active { display: flex; }
+    .viewbar { position: relative; display: flex; align-items: center; gap: 1rem; min-height: 4.2rem; padding: .7rem 1rem; border-bottom: 1px solid var(--line); background: #0d131d; }
+    .viewbar h2 { margin: 0; font-size: 1rem; font-weight: 650; }
+    .viewbar .spacer { flex: 1; }
+    .back { display: inline-flex; align-items: center; gap: .45rem; background: transparent; color: var(--text); padding: .65rem .7rem; border-radius: .55rem; }
+    .back:hover { background: var(--surface-raised); }
+    .viewbody { min-height: 0; flex: 1; display: flex; flex-direction: column; padding: 1rem; }
+    .editor { flex: 1; min-height: 18rem; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: .88rem; }
+    .editor-meta { color: var(--muted); font: .75rem ui-monospace, monospace; }
+    .dashboard-frame { width: 100%; height: 100%; border: 0; background: var(--bg); }
+    .log-tools { display: grid; grid-template-columns: minmax(10rem, 16rem) auto auto 1fr; gap: .65rem; align-items: center; margin-bottom: .8rem; }
+    .log-output { flex: 1; min-height: 16rem; margin: 0; overflow: auto; padding: 1rem; border: 1px solid var(--line); border-radius: .7rem; background: #060a10; color: #cbd7e8; font: .78rem/1.55 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .live { justify-self: end; color: var(--muted); font-size: .8rem; }
+    .live::before { content: ""; display: inline-block; width: .45rem; height: .45rem; margin-right: .45rem; border-radius: 50%; background: var(--accent); }
+    [hidden] { display: none !important; }
+    @media (max-width: 620px) {
+      .shell { padding: 2.6rem 1rem 4rem; }
+      h1 { margin-bottom: 2rem; }
+      .panel { padding: 1.25rem; border-radius: 1.2rem; }
+      .meta { margin-left: 0; }
+      .actions .button { flex: 1 1 calc(50% - .7rem); }
+      .viewbar { flex-wrap: wrap; }
+      .log-tools { grid-template-columns: 1fr 1fr; }
+      .live { justify-self: start; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">跳到主要内容</a>
+  <main id="main" class="shell">
+    <div class="kicker">FNOS / NATIVE SERVICE</div>
+    <h1>Mihomo<br>管理</h1>
+    <section class="panel" aria-labelledby="service-status">
+      <div class="status-row"><span id="dot" class="dot" aria-hidden="true"></span><span id="service-status" class="status">正在检查…</span></div>
+      <div id="meta" class="meta"></div>
+      <label for="url">订阅配置地址</label>
+      <input id="url" type="url" placeholder="https://example.com/config.yaml" autocomplete="off">
+      <div class="actions">
+        <button id="update" class="button" type="button">下载、校验并应用</button>
+        <button id="restart" class="button secondary" type="button">重启内核</button>
+        <button id="config-open" class="button secondary" type="button">编辑配置</button>
+        <button id="logs-open" class="button secondary" type="button">实时日志</button>
+        <button id="dashboard-open" class="button quiet" type="button">打开 Zashboard</button>
+      </div>
+      <div id="message" class="message" role="status" aria-live="polite"></div>
+      <p class="hint">控制 API 只监听 127.0.0.1:9090，并通过 fnOS 登录网关访问。配置保存前会执行 mihomo 校验，成功后保留 config.yaml.bak 并自动重启内核。</p>
+    </section>
+  </main>
+
+  <section id="config-view" class="view" aria-label="配置编辑器">
+    <header class="viewbar">
+      <button class="back" data-close="config-view" type="button">← 返回管理页</button>
+      <h2>config.yaml</h2><span id="config-dirty" class="editor-meta">未载入</span><span class="spacer"></span>
+      <button id="config-reload" class="button quiet" type="button">重新载入</button>
+      <button id="config-save" class="button" type="button">校验、保存并重启</button>
+    </header>
+    <div class="viewbody">
+      <textarea id="config-editor" class="editor" spellcheck="false" aria-label="Mihomo YAML 配置"></textarea>
+      <div id="config-message" class="message" role="status" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <section id="logs-view" class="view" aria-label="实时日志">
+    <header class="viewbar"><button class="back" data-close="logs-view" type="button">← 返回管理页</button><h2>实时日志</h2></header>
+    <div class="viewbody">
+      <div class="log-tools">
+        <select id="log-source" aria-label="日志来源"><option value="mihomo">Mihomo 内核</option><option value="manager">管理服务</option></select>
+        <button id="log-pause" class="button secondary" type="button">暂停</button>
+        <button id="log-clear" class="button quiet" type="button">清屏</button>
+        <span id="log-state" class="live">连接中</span>
+      </div>
+      <pre id="log-output" class="log-output" aria-live="polite"></pre>
+    </div>
+  </section>
+
+  <section id="dashboard-view" class="view" aria-label="Zashboard 控制面板">
+    <header class="viewbar"><button class="back" data-close="dashboard-view" type="button">← 返回管理页</button><h2>Zashboard</h2></header>
+    <iframe id="dashboard-frame" class="dashboard-frame" title="Zashboard 控制面板"></iframe>
+  </section>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    const base = location.pathname.replace(/\/?$/, '/');
+    let configHash = '', configOriginal = '', logStream = null, logPaused = false;
+
+    function setMessage(id, text, error = false) {
+      const node = $(id); node.textContent = text; node.classList.toggle('error', error);
+    }
+    async function request(path, options = {}) {
+      const response = await fetch(base + 'api/' + path, options);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) { const error = new Error(data.error || `请求失败（HTTP ${response.status}）`); error.status = response.status; throw error; }
+      return data;
+    }
+    async function refreshStatus() {
+      try {
+        const data = await request('status');
+        $('dot').classList.toggle('on', data.running);
+        $('service-status').textContent = data.running ? '服务运行中' : '服务未运行';
+        $('meta').textContent = [data.version && `mihomo ${data.version}`, data.pid && `PID ${data.pid}`, data.lastError].filter(Boolean).join(' · ');
+        if (!$('url').value) $('url').value = data.subscription || '';
+      } catch (error) { $('service-status').textContent = '状态获取失败'; $('meta').textContent = error.message; }
+    }
+    async function post(path, body) {
+      return request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+    }
+    function openView(id) { $(id).classList.add('active'); $('main').inert = true; $('main').setAttribute('aria-hidden', 'true'); document.body.style.overflow = 'hidden'; }
+    function closeView(id) {
+      if (id === 'config-view' && $('config-editor').value !== configOriginal && !confirm('配置尚未保存，确定返回吗？')) return;
+      if (id === 'logs-view') stopLogs();
+      $(id).classList.remove('active'); $('main').inert = false; $('main').removeAttribute('aria-hidden'); document.body.style.overflow = '';
+    }
+
+    $('update').onclick = async () => {
+      setMessage('message', '正在下载并校验配置…');
+      try { const result = await post('subscription', { url: $('url').value }); setMessage('message', result.changed ? '配置已更新，内核已重启' : '订阅内容未变化'); await refreshStatus(); }
+      catch (error) { setMessage('message', error.message, true); }
+    };
+    $('restart').onclick = async () => {
+      setMessage('message', '正在重启内核…');
+      try { await post('restart'); setMessage('message', '内核已重启'); await refreshStatus(); }
+      catch (error) { setMessage('message', error.message, true); }
+    };
+
+    async function loadConfig() {
+      setMessage('config-message', '正在读取配置…');
+      try {
+        const data = await request('config'); configHash = data.sha256; configOriginal = data.content;
+        $('config-editor').value = data.content; $('config-dirty').textContent = '已同步'; setMessage('config-message', '');
+      } catch (error) { setMessage('config-message', error.message, true); }
+    }
+    $('config-open').onclick = () => { openView('config-view'); loadConfig(); };
+    $('config-editor').addEventListener('input', () => { $('config-dirty').textContent = $('config-editor').value === configOriginal ? '已同步' : '有未保存修改'; });
+    $('config-reload').onclick = () => { if ($('config-editor').value === configOriginal || confirm('放弃当前未保存修改并重新载入吗？')) loadConfig(); };
+    $('config-save').onclick = async () => {
+      setMessage('config-message', '正在校验配置…'); $('config-save').disabled = true;
+      try {
+        const data = await request('config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: $('config-editor').value, sha256: configHash }) });
+        configHash = data.sha256; configOriginal = data.content; $('config-editor').value = data.content; $('config-dirty').textContent = '已同步';
+        setMessage('config-message', data.changed ? '配置已保存，内核已自动重启' : '配置内容未变化，无需重启'); await refreshStatus();
+      } catch (error) { setMessage('config-message', error.message, true); if (error.status === 409) $('config-dirty').textContent = '磁盘版本已更新'; }
+      finally { $('config-save').disabled = false; }
+    };
+
+    function appendLog(chunk, reset) {
+      const output = $('log-output'); if (reset) output.textContent = '';
+      output.textContent += chunk;
+      if (output.textContent.length > 1_000_000) output.textContent = output.textContent.slice(-800_000);
+      output.scrollTop = output.scrollHeight;
+    }
+    function startLogs() {
+      stopLogs(); logPaused = false; $('log-pause').textContent = '暂停'; $('log-state').textContent = '连接中';
+      logStream = new EventSource(base + 'api/logs/stream?source=' + encodeURIComponent($('log-source').value));
+      logStream.onopen = () => $('log-state').textContent = '实时更新';
+      logStream.onmessage = event => { const data = JSON.parse(event.data); appendLog(data.chunk || '', data.reset); };
+      logStream.onerror = () => $('log-state').textContent = '正在重连';
+    }
+    function stopLogs() { if (logStream) logStream.close(); logStream = null; }
+    $('logs-open').onclick = () => { openView('logs-view'); startLogs(); };
+    $('log-source').onchange = startLogs;
+    $('log-pause').onclick = () => { logPaused = !logPaused; if (logPaused) { stopLogs(); $('log-pause').textContent = '继续'; $('log-state').textContent = '已暂停'; } else startLogs(); };
+    $('log-clear').onclick = () => $('log-output').textContent = '';
+
+    $('dashboard-open').onclick = () => {
+      const query = new URLSearchParams({ hostname: location.hostname, secondaryPath: '/app/mihomo/core', disableUpgradeCore: '1' });
+      if (location.port) query.set('port', location.port);
+      if (!$('dashboard-frame').src) $('dashboard-frame').src = base + 'dashboard/#/setup?' + query;
+      openView('dashboard-view');
+    };
+    document.querySelectorAll('[data-close]').forEach(button => button.onclick = () => closeView(button.dataset.close));
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') { const active = document.querySelector('.view.active'); if (active) closeView(active.id); } });
+    refreshStatus(); setInterval(refreshStatus, 10000);
+  </script>
+</body>
+</html>
